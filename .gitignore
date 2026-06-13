@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+.venv
+venv/
+.cache/
+*.parquet
+.DS_Store
+export.xml
+ObsidianVault/
