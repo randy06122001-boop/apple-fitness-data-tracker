@@ -84,3 +84,26 @@ METRIC_TYPES = {
 
 # Workout type identifier
 WORKOUT_TYPE = "HKWorkoutActivityType"
+
+# ──────────────────────────────────────────────
+# METRIC DISPLAY UNITS
+# ──────────────────────────────────────────────
+METRIC_UNITS = {
+    "resting_heart_rate":      "bpm",
+    "heart_rate":              "bpm",
+    "hrv":                     "ms",
+    "vo2max":                  "mL/kg/min",
+    "walking_heart_rate_avg":  "bpm",
+    "step_count":              "steps",
+    "active_energy":           "kcal",
+    "exercise_minutes":        "min",
+    "sleep_duration":          "hrs",
+    "sleep_analysis":          "hrs",
+    "wrist_temperature":       "°C",
+    "environmental_audio":     "dBASPL",
+    "running_power":           "W",
+    "ground_contact_time":     "ms",
+    "vertical_oscillation":    "cm",
+    "water_temperature":       "°C",
+    "underwater_depth":        "m",
+}

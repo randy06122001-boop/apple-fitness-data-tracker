@@ -54,17 +54,38 @@ class AnalysisResults:
 # ────────────────────────────────────────────────────────────────
 
 _KEY_METRICS: list[str] = [
+    # Cardiovascular
     "resting_heart_rate",
+    "heart_rate",
     "hrv",
     "vo2max",
+    "walking_heart_rate_avg",
+    # Activity
     "step_count",
     "active_energy",
-    "sleep_duration",  # derived, not raw
+    "exercise_minutes",
+    # Sleep (derived)
+    "sleep_duration",
+    # Body & Environment
+    "wrist_temperature",
+    "environmental_audio",
+    # Ultra-Specific
+    "running_power",
+    "ground_contact_time",
+    "vertical_oscillation",
+    "water_temperature",
+    "underwater_depth",
 ]
 
 # Which metrics are "higher is better" vs "lower is better"
-_HIGHER_IS_BETTER: set[str] = {"hrv", "vo2max", "step_count", "active_energy", "sleep_duration"}
-_LOWER_IS_BETTER: set[str] = {"resting_heart_rate"}
+_HIGHER_IS_BETTER: set[str] = {
+    "hrv", "vo2max", "step_count", "active_energy",
+    "sleep_duration", "exercise_minutes", "running_power",
+}
+_LOWER_IS_BETTER: set[str] = {
+    "resting_heart_rate", "walking_heart_rate_avg",
+    "ground_contact_time",
+}
 
 
 def _safe_pearsonr(x: pd.Series, y: pd.Series) -> dict[str, float]:
@@ -85,18 +106,32 @@ def _safe_pearsonr(x: pd.Series, y: pd.Series) -> dict[str, float]:
 def _daily_mean(df: pd.DataFrame, value_col: str = "value") -> pd.Series:
     """Collapse an intra-day DataFrame to a daily mean series.
 
-    Expects a ``date`` column (or DatetimeIndex).  Returns a Series
-    indexed by date.
+    Checks for ``date``, ``startDate``, or ``creationDate`` columns
+    (in that priority order).  Returns a Series indexed by date.
     """
     if df.empty or value_col not in df.columns:
         return pd.Series(dtype=float)
 
     work = df.copy()
-    if "date" in work.columns:
-        work["date"] = pd.to_datetime(work["date"])
-        work = work.set_index("date")
-    elif not isinstance(work.index, pd.DatetimeIndex):
+
+    # Find the best date column
+    date_col = None
+    for candidate in ("date", "startDate", "creationDate"):
+        if candidate in work.columns:
+            date_col = candidate
+            break
+
+    if date_col is not None:
+        work["_date"] = pd.to_datetime(work[date_col], errors="coerce").dt.normalize()
+        work = work.dropna(subset=["_date"])
+        work = work.set_index("_date")
+    elif isinstance(work.index, pd.DatetimeIndex):
+        pass  # already has a datetime index
+    else:
         return pd.Series(dtype=float)
+
+    # Ensure value column is numeric
+    work[value_col] = pd.to_numeric(work[value_col], errors="coerce")
 
     return work[value_col].resample("D").mean().dropna()
 
@@ -631,20 +666,22 @@ def analyze_workouts(data: dict[str, pd.DataFrame]) -> dict[str, Any]:
 def _build_daily_series(data: dict[str, pd.DataFrame]) -> dict[str, pd.Series]:
     """Convert raw DataFrames into daily-mean Series for each key metric.
 
-    Also derives ``sleep_duration`` from the sleep analysis data.
+    Processes ALL metrics present in the parsed data dict, not just a
+    hardcoded list.  Also derives ``sleep_duration`` from sleep analysis.
     """
     series: dict[str, pd.Series] = {}
 
-    for metric in _KEY_METRICS:
-        if metric == "sleep_duration":
-            continue  # handled below
-        df = data.get(metric, pd.DataFrame())
+    # Process every metric key present in the data
+    skip_keys = {"sleep_analysis", "workouts", "sleep_duration"}
+    for metric, df in data.items():
+        if metric in skip_keys:
+            continue
         if not df.empty:
             s = _daily_mean(df)
             if not s.empty:
                 series[metric] = s
 
-    # Derive nightly sleep duration
+    # Derive nightly sleep duration from sleep_analysis
     sleep_df = data.get("sleep_analysis", pd.DataFrame())
     if not sleep_df.empty:
         sleep_info = analyze_sleep(data)
@@ -652,13 +689,6 @@ def _build_daily_series(data: dict[str, pd.DataFrame]) -> dict[str, pd.Series]:
         if not nightly.empty:
             nightly.index = pd.to_datetime(nightly.index)
             series["sleep_duration"] = nightly
-
-    # Include wrist temperature if present (for correlation analysis)
-    wt = data.get("wrist_temperature", pd.DataFrame())
-    if not wt.empty:
-        s = _daily_mean(wt)
-        if not s.empty:
-            series["wrist_temperature"] = s
 
     return series
 

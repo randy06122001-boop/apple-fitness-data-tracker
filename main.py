@@ -32,6 +32,15 @@ from ai_coach import (
     chat,
 )
 from obsidian_export import export_to_obsidian
+from snapshot import (
+    build_snapshot,
+    save_snapshot,
+    get_previous_snapshot,
+    compute_wow_deltas,
+    load_snapshots,
+    is_monthly_due,
+    get_monthly_snapshots,
+)
 
 # Reconfigure stdout to support UTF-8 encoding in Windows terminals
 if hasattr(sys.stdout, "reconfigure"):
@@ -141,6 +150,8 @@ def stage_obsidian_export(
     analysis_results: dict,
     ai_summary: str,
     ai_recommendations: str,
+    wow_deltas: dict | None = None,
+    monthly_snapshots: list | None = None,
 ) -> None:
     """Stage 4: Export everything to Obsidian."""
     print("\n" + "=" * 60)
@@ -148,12 +159,21 @@ def stage_obsidian_export(
     print("=" * 60)
 
     report_date = datetime.now().strftime("%Y-%m-%d")
-    export_to_obsidian(
+    result = export_to_obsidian(
         analysis_results=analysis_results,
         ai_summary=ai_summary,
         ai_recommendations=ai_recommendations,
         report_date=report_date,
+        wow_deltas=wow_deltas,
+        monthly_snapshots=monthly_snapshots,
     )
+
+    if wow_deltas:
+        print(f"  📈 Week-over-week comparison: {len(wow_deltas)} metrics compared.")
+    if result.get("monthly_summary"):
+        print(f"  📅 Monthly rollup generated!")
+    if result.get("metric_pages"):
+        print(f"  📊 {len(result['metric_pages'])} metric pages generated.")
 
 
 def interactive_chat(analysis_results: dict) -> None:
@@ -212,6 +232,11 @@ def main() -> None:
         action="store_true",
         help="Skip exporting to Obsidian vault.",
     )
+    parser.add_argument(
+        "--force-monthly",
+        action="store_true",
+        help="Force a monthly rollup report regardless of run count.",
+    )
     args = parser.parse_args()
 
     print_banner()
@@ -241,9 +266,41 @@ def main() -> None:
     if not args.skip_ai:
         ai_summary, ai_recommendations = stage_ai_coach(analysis_results)
 
+    # ── Stage 3.5: Weekly Snapshot ──
+    print("\n" + "=" * 60)
+    print("  💾  Saving Weekly Snapshot")
+    print("=" * 60)
+
+    report_date = datetime.now().strftime("%Y-%m-%d")
+    previous_snapshot = get_previous_snapshot()
+    current_snapshot = build_snapshot(analysis_results, report_date)
+    save_snapshot(current_snapshot)
+    print(f"  ✅ Snapshot #{current_snapshot['run_number']} saved for {report_date}.")
+
+    # Compute week-over-week deltas
+    wow_deltas = None
+    if previous_snapshot:
+        wow_deltas = compute_wow_deltas(current_snapshot, previous_snapshot)
+        print(f"  📈 Week-over-week deltas computed for {len(wow_deltas)} metrics.")
+        prev_week = previous_snapshot.get('week', '?')
+        print(f"  📅 Comparing against week of {prev_week}.")
+    else:
+        print("  ℹ️  First run — no previous data to compare against.")
+
+    # Check if monthly rollup is due
+    monthly_snapshots = None
+    all_snapshots = load_snapshots()
+    if args.force_monthly or is_monthly_due(all_snapshots):
+        monthly_snapshots = get_monthly_snapshots(all_snapshots)
+        print(f"  📅 Monthly rollup triggered (covering {len(monthly_snapshots)} weeks).")
+
     # ── Stage 4: Obsidian Export ──
     if not args.skip_obsidian:
-        stage_obsidian_export(analysis_results, ai_summary, ai_recommendations)
+        stage_obsidian_export(
+            analysis_results, ai_summary, ai_recommendations,
+            wow_deltas=wow_deltas,
+            monthly_snapshots=monthly_snapshots,
+        )
 
     # ── Optional: Interactive Chat ──
     if args.chat:
@@ -256,6 +313,7 @@ def main() -> None:
     print(f"  📂 Obsidian vault: {config.OBSIDIAN_VAULT_PATH}")
     print(f"  📊 Cached data:    {config.CACHE_DIR}")
     print(f"  🤖 AI model:       {config.OLLAMA_MODEL}")
+    print(f"  💾 Snapshots:      {len(all_snapshots)} total runs")
     print()
 
 

@@ -189,25 +189,11 @@ def _frontmatter(fields: Dict[str, Any]) -> str:
 # WEEKLY SUMMARY
 # ──────────────────────────────────────────────
 
-def _extract_metrics_overview(analysis_results: Dict[str, Any]) -> str:
-    """Build a Markdown bullet list of key metrics with trend arrows.
-
-    Expected ``analysis_results`` schema (flexible – missing keys are skipped)::
-
-        {
-            "metrics": {
-                "resting_heart_rate": {
-                    "latest": 52,
-                    "unit": "bpm",
-                    "trend": "down",       # up / down / flat
-                    "7d_avg": 53.2,
-                    "30d_avg": 54.1,
-                },
-                ...
-            },
-            "anomalies": [ ... ],
-        }
-    """
+def _extract_metrics_overview(
+    analysis_results: Dict[str, Any],
+    wow_deltas: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    """Build a Markdown bullet list of key metrics with trend arrows and WoW deltas."""
     metrics: Dict[str, Any] = analysis_results.get("trend_summary", {})
     if not metrics:
         return "_No metric data available._\n"
@@ -218,14 +204,26 @@ def _extract_metrics_overview(analysis_results: Dict[str, Any]) -> str:
             continue
         display = _metric_display_name(key)
         latest = info.get("current_value", "–")
-        unit = "units"  # Unit isn't in trend_summary directly, fallback to general
+        unit = config.METRIC_UNITS.get(key, "")
         trend = _trend_arrow(info.get("direction", "flat"))
-        avg_30 = info.get("avg_90d") # Close enough fallback for overview
+        avg_90 = info.get("avg_90d")
 
         line = f"- **{display}**: {latest} {unit} {trend}"
+
+        # Add week-over-week delta if available
+        if wow_deltas and key in wow_deltas:
+            delta_info = wow_deltas[key]
+            delta = delta_info.get("delta", 0)
+            pct = delta_info.get("pct_change", 0)
+            if delta_info.get("direction") == "unchanged":
+                line += "  _(unchanged from last week)_"
+            else:
+                sign = "+" if delta > 0 else ""
+                line += f"  _({sign}{delta} {unit} / {sign}{pct}% from last week)_"
+
         details: List[str] = []
-        if avg_30 is not None:
-            details.append(f"90-day avg {avg_30}")
+        if avg_90 is not None:
+            details.append(f"90-day avg {avg_90}")
         if details:
             line += "  (" + " · ".join(details) + ")"
 
@@ -271,20 +269,9 @@ def generate_weekly_summary(
     ai_summary: str,
     ai_recommendations: str,
     report_date: str,
+    wow_deltas: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Path:
-    """Create (or overwrite) a Weekly Summary note and return its path.
-
-    Parameters
-    ----------
-    analysis_results:
-        Dict produced by the analyzer module.
-    ai_summary:
-        Free-text health summary from the AI coach.
-    ai_recommendations:
-        Free-text recommendations from the AI coach.
-    report_date:
-        ISO-8601 date string (``YYYY-MM-DD``) used in the filename / title.
-    """
+    """Create (or overwrite) a Weekly Summary note and return its path."""
     filename = f"Weekly Summary {report_date}.md"
     filepath = SUMMARIES_DIR / filename
 
@@ -295,8 +282,39 @@ def generate_weekly_summary(
         "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
     })
 
-    overview = _extract_metrics_overview(analysis_results)
+    overview = _extract_metrics_overview(analysis_results, wow_deltas)
     anomalies = _extract_anomalies_section(analysis_results)
+
+    # Build WoW comparison section
+    wow_section = ""
+    if wow_deltas:
+        wow_lines = ["## 📈 Week-over-Week Changes\n"]
+        for key, delta_info in wow_deltas.items():
+            display = _metric_display_name(key)
+            delta = delta_info.get("delta", 0)
+            pct = delta_info.get("pct_change", 0)
+            unit = delta_info.get("unit", "")
+            curr = delta_info.get("current_avg", "–")
+            prev = delta_info.get("previous_avg", "–")
+            direction = delta_info.get("direction", "unchanged")
+
+            if direction == "up":
+                emoji = "🔺"
+            elif direction == "down":
+                emoji = "🔻"
+            else:
+                emoji = "➖"
+
+            sign = "+" if delta > 0 else ""
+            wow_lines.append(
+                f"| {display} | {prev} {unit} | {curr} {unit} | {emoji} {sign}{delta} ({sign}{pct}%) |"
+            )
+
+        # Insert table header before rows
+        header = "| Metric | Last Week | This Week | Change |\n| ------ | --------: | --------: | ------ |"
+        wow_lines.insert(1, header)
+        wow_lines.append("")
+        wow_section = "\n".join(wow_lines) + "\n"
 
     body_parts: List[str] = [
         fm,
@@ -304,6 +322,13 @@ def generate_weekly_summary(
         "## Key Metrics Overview\n",
         overview,
         "---\n",
+    ]
+
+    if wow_section:
+        body_parts.append(wow_section)
+        body_parts.append("---\n")
+
+    body_parts.extend([
         "## 🤖 AI Health Summary\n",
         ai_summary.strip() + "\n",
         "---\n",
@@ -317,7 +342,7 @@ def generate_weekly_summary(
         f"- [[Coaching Log]] – full AI coaching history",
         f"- [[Anomaly Report {report_date}]] – detailed anomaly breakdown",
         "",
-    ]
+    ])
     content = "\n".join(body_parts)
 
     _write_full(filepath, content)
@@ -395,7 +420,7 @@ def generate_metric_page(
     latest = metric_info.get("current_value", "–")
     trend = metric_info.get("direction", "flat")
     avg_90 = metric_info.get("avg_90d")
-    unit = "" # Could deduce from config but empty is fine for now
+    unit = config.METRIC_UNITS.get(metric_key, "")
 
     new_row = _build_metric_table_row(report_date, latest, unit, trend)
     
@@ -612,6 +637,101 @@ def generate_anomaly_report(
 
 
 # ──────────────────────────────────────────────
+# MONTHLY ROLLUP
+# ──────────────────────────────────────────────
+
+MONTHLY_DIR: Path = _BASE_DIR / "Summaries"  # Reuse Summaries folder
+
+
+def generate_monthly_summary(
+    snapshots: List[Dict[str, Any]],
+    report_date: str,
+) -> Optional[Path]:
+    """Generate a monthly rollup note from the last 4 weekly snapshots.
+
+    Returns None if fewer than 2 snapshots are available.
+    """
+    if len(snapshots) < 2:
+        logger.info("Not enough snapshots for a monthly rollup (need at least 2).")
+        return None
+
+    filename = f"Monthly Summary {report_date}.md"
+    filepath = MONTHLY_DIR / filename
+
+    fm = _frontmatter({
+        "title": f"Monthly Health Summary – {report_date}",
+        "date": report_date,
+        "tags": ["health", "monthly-review", "rollup"],
+        "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "weeks_covered": len(snapshots),
+    })
+
+    # ── Aggregate metrics across the month's snapshots ──
+    all_metrics: Dict[str, List[float]] = {}
+    for snap in snapshots:
+        for metric_key, metric_info in snap.get("metrics", {}).items():
+            avg_val = metric_info.get("avg")
+            if avg_val is not None:
+                all_metrics.setdefault(metric_key, []).append(float(avg_val))
+
+    metric_table_lines = [
+        "| Metric | Month Avg | Best Week | Worst Week | Unit |",
+        "| ------ | --------: | --------: | ---------: | ---- |",
+    ]
+    for metric_key, values in all_metrics.items():
+        display = _metric_display_name(metric_key)
+        unit = config.METRIC_UNITS.get(metric_key, "")
+        month_avg = round(sum(values) / len(values), 2)
+        best = round(max(values), 2)
+        worst = round(min(values), 2)
+        metric_table_lines.append(
+            f"| {display} | {month_avg} | {best} | {worst} | {unit} |"
+        )
+
+    # ── Aggregate totals ──
+    total_anomalies = sum(s.get("anomaly_count", 0) for s in snapshots)
+    total_workouts = sum(s.get("workout_count", 0) for s in snapshots)
+    total_workout_hrs = round(sum(s.get("workout_duration_hrs", 0) for s in snapshots), 1)
+    sleep_avgs = [s.get("sleep_avg_hrs") for s in snapshots if s.get("sleep_avg_hrs") is not None]
+    avg_sleep = round(sum(sleep_avgs) / len(sleep_avgs), 2) if sleep_avgs else None
+
+    # ── Weekly summary links ──
+    week_links = []
+    for snap in snapshots:
+        week_date = snap.get("week", "?")
+        week_links.append(f"- [[Weekly Summary {week_date}]]")
+
+    body_parts: List[str] = [
+        fm,
+        f"# 📅 Monthly Health Summary – {report_date}\n",
+        f"_Covering {len(snapshots)} weekly reports_\n",
+        "## Monthly Metrics Overview\n",
+        "\n".join(metric_table_lines) + "\n",
+        "---\n",
+        "## Monthly Totals\n",
+        f"- **Total Anomalies Flagged**: {total_anomalies}",
+        f"- **Total Workouts**: {total_workouts}",
+        f"- **Total Workout Time**: {total_workout_hrs} hrs",
+    ]
+
+    if avg_sleep is not None:
+        body_parts.append(f"- **Average Sleep**: {avg_sleep} hrs/night")
+
+    body_parts.extend([
+        "",
+        "---\n",
+        "## Weekly Reports\n",
+        "\n".join(week_links),
+        "",
+    ])
+
+    content = "\n".join(body_parts)
+    _write_full(filepath, content)
+    logger.info("Generated monthly summary: %s", filepath)
+    return filepath
+
+
+# ──────────────────────────────────────────────
 # MAIN ENTRY POINT
 # ──────────────────────────────────────────────
 
@@ -620,49 +740,25 @@ def export_to_obsidian(
     ai_summary: str,
     ai_recommendations: str,
     report_date: str,
+    wow_deltas: Optional[Dict[str, Dict[str, Any]]] = None,
+    monthly_snapshots: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Export all analysis artefacts to the Obsidian vault.
 
     This is the single entry point that orchestrates every export step:
 
     1. Ensure the directory tree exists.
-    2. Write/overwrite the Weekly Summary note.
+    2. Write/overwrite the Weekly Summary note (with WoW deltas).
     3. Create or update per-metric tracking pages.
     4. Append to the AI Coaching Log.
     5. Write an Anomaly Report (if anomalies are present).
-
-    Parameters
-    ----------
-    analysis_results:
-        Analysis dict produced by the analyzer module.  Expected keys:
-
-        - ``metrics``   – ``Dict[str, dict]`` keyed by metric snake-case name
-        - ``anomalies`` – ``List[dict]`` of anomaly records
-
-    ai_summary:
-        Plain-text health summary generated by the AI coach.
-    ai_recommendations:
-        Plain-text action items generated by the AI coach.
-    report_date:
-        ``YYYY-MM-DD`` date string that labels every generated note.
-
-    Returns
-    -------
-    dict
-        A summary of what was written::
-
-            {
-                "weekly_summary": Path,
-                "metric_pages": [Path, ...],
-                "coaching_log": Path,
-                "anomaly_report": Path | None,
-            }
+    6. Generate a Monthly Summary (if monthly_snapshots is provided).
     """
     logger.info("Starting Obsidian export for %s …", report_date)
     _ensure_directories()
 
     summary_path = generate_weekly_summary(
-        analysis_results, ai_summary, ai_recommendations, report_date
+        analysis_results, ai_summary, ai_recommendations, report_date, wow_deltas
     )
 
     metric_paths = generate_all_metric_pages(analysis_results, report_date)
@@ -671,11 +767,16 @@ def export_to_obsidian(
 
     anomaly_path = generate_anomaly_report(analysis_results, report_date)
 
+    monthly_path = None
+    if monthly_snapshots:
+        monthly_path = generate_monthly_summary(monthly_snapshots, report_date)
+
     result = {
         "weekly_summary": summary_path,
         "metric_pages": metric_paths,
         "coaching_log": coaching_path,
         "anomaly_report": anomaly_path,
+        "monthly_summary": monthly_path,
     }
     logger.info(
         "Obsidian export complete: %d metric pages, anomaly report %s",
