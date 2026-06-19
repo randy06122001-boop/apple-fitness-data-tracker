@@ -103,8 +103,8 @@ def _safe_pearsonr(x: pd.Series, y: pd.Series) -> dict[str, float]:
     return {"r": round(float(r_val), 4), "p": round(float(p_val), 6), "n": n}
 
 
-def _daily_mean(df: pd.DataFrame, value_col: str = "value") -> pd.Series:
-    """Collapse an intra-day DataFrame to a daily mean series.
+def _daily_aggregate(df: pd.DataFrame, value_col: str = "value", agg_func: str = "mean") -> pd.Series:
+    """Collapse an intra-day DataFrame to a daily series using the specified aggregation.
 
     Checks for ``date``, ``startDate``, or ``creationDate`` columns
     (in that priority order).  Returns a Series indexed by date.
@@ -133,7 +133,7 @@ def _daily_mean(df: pd.DataFrame, value_col: str = "value") -> pd.Series:
     # Ensure value column is numeric
     work[value_col] = pd.to_numeric(work[value_col], errors="coerce")
 
-    return work[value_col].resample("D").mean().dropna()
+    return work[value_col].resample("D").agg(agg_func).dropna()
 
 
 def _classify_trend(series: pd.Series, window: int = 30) -> str:
@@ -673,11 +673,25 @@ def _build_daily_series(data: dict[str, pd.DataFrame]) -> dict[str, pd.Series]:
 
     # Process every metric key present in the data
     skip_keys = {"sleep_analysis", "workouts", "sleep_duration"}
+    
+    # Metrics that should be summed rather than averaged
+    cumulative_metrics = {
+        "step_count", 
+        "active_energy", 
+        "basal_energy_burned", 
+        "exercise_minutes", 
+        "distance_walking_running",
+        "distance_cycling",
+        "flights_climbed",
+        "apple_stand_time"
+    }
+    
     for metric, df in data.items():
         if metric in skip_keys:
             continue
         if not df.empty:
-            s = _daily_mean(df)
+            agg = "sum" if metric in cumulative_metrics else "mean"
+            s = _daily_aggregate(df, agg_func=agg)
             if not s.empty:
                 series[metric] = s
 
