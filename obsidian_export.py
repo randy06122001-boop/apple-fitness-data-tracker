@@ -31,13 +31,31 @@ logger = logging.getLogger(__name__)
 
 def _get_anomalies_list(analysis_results: Dict[str, Any]) -> List[Dict[str, Any]]:
     import pandas as pd
+    from datetime import datetime, timedelta
+    
     anomalies = analysis_results.get("anomalies")
     if anomalies is None:
         return []
+        
+    cutoff_7d = pd.Timestamp.now().normalize() - pd.Timedelta(days=7)
+    
     if isinstance(anomalies, pd.DataFrame):
         if anomalies.empty:
             return []
-        records = anomalies.to_dict(orient="records")
+            
+        # Filter to last 7 days to prevent repeating old anomalies
+        if "date" in anomalies.columns:
+            try:
+                # Handle timezone matching if needed
+                if hasattr(anomalies["date"].dtype, "tz") and anomalies["date"].dtype.tz is not None:
+                    cutoff_7d = cutoff_7d.tz_localize(anomalies["date"].dtype.tz)
+                recent_anomalies = anomalies[anomalies["date"] >= cutoff_7d]
+            except Exception:
+                recent_anomalies = anomalies
+        else:
+            recent_anomalies = anomalies
+            
+        records = recent_anomalies.to_dict(orient="records")
         for r in records:
             if "deviation_sigma" in r and "deviation" not in r:
                 r["deviation"] = r["deviation_sigma"]
