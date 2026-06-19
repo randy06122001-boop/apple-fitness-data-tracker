@@ -112,14 +112,10 @@ def build_snapshot(
     sleep_stats = sleep_analysis.get("stats", {})
     sleep_avg_hrs = sleep_stats.get("mean_hrs")
 
-    # ── Run number ──
-    existing = load_snapshots()
-    run_number = len(existing) + 1
-
     snapshot = {
         "week": report_date,
         "generated_at": datetime.now().isoformat(),
-        "run_number": run_number,
+        # run_number is assigned in save_snapshot
         "metrics": metrics_snapshot,
         "anomaly_count": anomaly_count,
         "workout_count": workout_count,
@@ -134,23 +130,43 @@ def build_snapshot(
 # Save / Load
 # ────────────────────────────────────────────────────────────────
 
-def save_snapshot(snapshot: Dict[str, Any]) -> Path:
-    """Append a snapshot to the history file and return the file path."""
+def save_snapshot(snapshot: Dict[str, Any]) -> tuple[Path, bool]:
+    """Append or update a snapshot in the history file.
+
+    Returns:
+        (filepath, was_updated)
+    """
     existing = load_snapshots()
-    existing.append(snapshot)
+    was_updated = False
+    
+    # Try to find existing snapshot for this week
+    for i, snap in enumerate(existing):
+        if snap.get("week") == snapshot.get("week"):
+            # Update in-place, preserving run_number
+            snapshot["run_number"] = snap.get("run_number", i + 1)
+            existing[i] = snapshot
+            was_updated = True
+            break
+            
+    if not was_updated:
+        snapshot["run_number"] = len(existing) + 1
+        existing.append(snapshot)
 
     SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
     SNAPSHOT_FILE.write_text(
         json.dumps(existing, indent=2, default=str),
         encoding="utf-8",
     )
+    
+    action = "Updated" if was_updated else "Saved"
     logger.info(
-        "Saved snapshot #%d for week %s → %s",
+        "%s snapshot #%d for week %s → %s",
+        action,
         snapshot.get("run_number", "?"),
         snapshot.get("week", "?"),
         SNAPSHOT_FILE,
     )
-    return SNAPSHOT_FILE
+    return SNAPSHOT_FILE, was_updated
 
 
 def load_snapshots() -> List[Dict[str, Any]]:

@@ -274,8 +274,12 @@ def main() -> None:
     report_date = datetime.now().strftime("%Y-%m-%d")
     previous_snapshot = get_previous_snapshot()
     current_snapshot = build_snapshot(analysis_results, report_date)
-    save_snapshot(current_snapshot)
-    print(f"  ✅ Snapshot #{current_snapshot['run_number']} saved for {report_date}.")
+    _, was_updated = save_snapshot(current_snapshot)
+    
+    if was_updated:
+        print(f"  ⚠️ Updated existing snapshot #{current_snapshot['run_number']} for {report_date}.")
+    else:
+        print(f"  ✅ Snapshot #{current_snapshot['run_number']} saved for {report_date}.")
 
     # Compute week-over-week deltas
     wow_deltas = None

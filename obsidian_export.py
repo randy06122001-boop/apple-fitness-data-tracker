@@ -130,26 +130,15 @@ def _sanitise_filename(name: str) -> str:
 # ──────────────────────────────────────────────
 
 def safe_append(filepath: Path, content: str) -> None:
-    """Append *content* to *filepath* without overwriting existing data.
-
-    If the file does not exist it is created (along with parent directories).
-    A single blank line is inserted between the existing content and the new
-    block so that Markdown rendering stays clean.
-    """
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if filepath.exists():
-            existing = filepath.read_text(encoding="utf-8")
-            # Avoid double-blank-lines at the join point.
-            separator = "\n\n" if existing and not existing.endswith("\n\n") else "\n"
-            filepath.write_text(existing + separator + content, encoding="utf-8")
-            logger.info("Appended to existing file: %s", filepath)
-        else:
-            filepath.write_text(content, encoding="utf-8")
-            logger.info("Created new file: %s", filepath)
-    except OSError:
-        logger.exception("Failed to write to %s", filepath)
-        raise
+    """Safely append to a file, ensuring there's a separating newline."""
+    if not filepath.exists():
+        _write_full(filepath, content)
+        return
+    current = filepath.read_text(encoding="utf-8")
+    if not current.endswith("\n"):
+        content = "\n" + content
+    with filepath.open("a", encoding="utf-8") as f:
+        f.write(content)
 
 
 def _write_full(filepath: Path, content: str) -> None:
@@ -162,6 +151,21 @@ def _write_full(filepath: Path, content: str) -> None:
         logger.exception("Failed to write to %s", filepath)
         raise
 
+
+def _has_date_row(content: str, date: str) -> bool:
+    return bool(re.search(r"^\|\s*" + re.escape(date) + r"\s*\|", content, re.MULTILINE))
+
+def _replace_date_row(content: str, date: str, new_row: str) -> str:
+    pattern = r"^\|\s*" + re.escape(date) + r"\s*\|.*$"
+    return re.sub(pattern, new_row, content, count=1, flags=re.MULTILINE)
+
+def _has_coaching_entry(content: str, date: str) -> bool:
+    return f"## {date}" in content
+
+def _replace_coaching_entry(content: str, date: str, new_entry: str) -> str:
+    # Match from ## YYYY-MM-DD up to the next ---
+    pattern = r"##\s*" + re.escape(date) + r"\n.*?^---$"
+    return re.sub(pattern, new_entry.strip(), content, count=1, flags=re.MULTILINE | re.DOTALL)
 
 # ──────────────────────────────────────────────
 # YAML FRONTMATTER
@@ -430,16 +434,21 @@ def generate_metric_page(
         chart_path = generate_metric_chart(metric_key, metric_df, report_date)
 
     if filepath.exists():
-        # Append the new data-point row to the existing table.
+        # Read the existing content
         existing = filepath.read_text(encoding="utf-8")
 
         # Update the "Current Trend" line if present.
         updated = _update_current_trend(existing, trend)
 
-        # Append the row just before the end of file.
-        safe_append(filepath, "")  # ensure trailing newline
-        filepath.write_text(updated.rstrip("\n") + "\n" + new_row + "\n", encoding="utf-8")
-        logger.info("Appended data-point to %s", filepath)
+        if _has_date_row(updated, report_date):
+            updated = _replace_date_row(updated, report_date, new_row)
+            filepath.write_text(updated, encoding="utf-8")
+            logger.info("Updated existing data-point row for %s in %s", report_date, filepath)
+        else:
+            # Append the row just before the end of file.
+            safe_append(filepath, "")  # ensure trailing newline
+            filepath.write_text(updated.rstrip("\n") + "\n" + new_row + "\n", encoding="utf-8")
+            logger.info("Appended data-point to %s", filepath)
     else:
         # Build a brand-new metric page and backfill data log
         fm = _frontmatter({
@@ -548,7 +557,13 @@ def generate_coaching_log(
     entry = "\n".join(entry_lines)
 
     if filepath.exists():
-        safe_append(filepath, entry)
+        existing = filepath.read_text(encoding="utf-8")
+        if _has_coaching_entry(existing, report_date):
+            updated = _replace_coaching_entry(existing, report_date, entry)
+            filepath.write_text(updated, encoding="utf-8")
+            logger.info("Replaced existing coaching log entry for %s", report_date)
+        else:
+            safe_append(filepath, entry)
     else:
         fm = _frontmatter({
             "title": "AI Coaching Log",
