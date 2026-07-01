@@ -64,21 +64,30 @@ ollama pull llama3
 
 ### 5. Run the Analyzer
 
+The main script (`main.py`) supports several command-line flags to customize how the pipeline runs.
+
+**Basic Run:**
 ```bash
 # Full pipeline: parse → analyze → AI coach → Obsidian export
 python main.py
+```
 
-# Skip AI features (no Ollama needed)
+**Available CLI Flags:**
+| Flag | Description |
+|------|-------------|
+| `--skip-ai` | Skips the Ollama AI coaching stage. Useful if Ollama isn't running or you just want quick data exports. |
+| `--force-parse` | Forces the parser to re-read the raw `export.xml` file, even if cached Parquet data already exists. |
+| `--force-monthly` | Forces the generation of a Monthly Rollup report, bypassing the normal "every 4th run" trigger. |
+| `--skip-obsidian` | Skips exporting files to the Obsidian vault. Useful for testing just the parsing/analysis logic. |
+| `--chat` | Enters an interactive chat mode after the pipeline finishes, allowing you to ask the AI questions about your data. |
+
+**Examples:**
+```bash
+# Quick run without AI
 python main.py --skip-ai
 
-# Force re-parse cached data
-python main.py --force-parse
-
-# Enter interactive chat mode after analysis
-python main.py --chat
-
-# Skip Obsidian export
-python main.py --skip-obsidian
+# Force a monthly report and start a chat session
+python main.py --force-monthly --chat
 ```
 
 ## 📁 Project Structure
