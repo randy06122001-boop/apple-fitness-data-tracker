@@ -103,6 +103,27 @@ def _ensure_directories() -> None:
     for directory in _ALL_DIRS:
         directory.mkdir(parents=True, exist_ok=True)
         logger.debug("Ensured directory exists: %s", directory)
+    _ensure_personal_context_stub()
+
+def _ensure_personal_context_stub() -> None:
+    """Create a stub Personal_Context.md if it doesn't exist."""
+    stub_path = AI_COACHING_DIR / "Personal_Context.md"
+    if not stub_path.exists():
+        content = (
+            "# 🧠 Personal Context\n\n"
+            "Welcome to your AI Coach's memory!\n\n"
+            "Write anything in this file that you want the AI to permanently remember when analyzing your data.\n"
+            "For example:\n"
+            "- **Goals**: I am training for a marathon.\n"
+            "- **Diet/Supplements**: I take Vitamin D and Magnesium daily.\n"
+            "- **Injuries**: I am recovering from a sprained ankle.\n"
+            "- **Profile**: I am a 35-year-old male.\n\n"
+            "*(The AI reads this file every time it generates a summary, recommendation, or chats with you.)*\n"
+        )
+        try:
+            stub_path.write_text(content, encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to create Personal_Context.md stub: {e}")
 
 
 # ──────────────────────────────────────────────

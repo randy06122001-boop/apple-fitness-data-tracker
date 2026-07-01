@@ -283,6 +283,23 @@ def _format_summary_stats(analysis_results: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _get_personal_context() -> str:
+    """Read the user's personal context file from the Obsidian vault if it exists."""
+    import config
+    from pathlib import Path
+    
+    context_file = config.OBSIDIAN_VAULT_PATH / config.OBSIDIAN_HEALTH_FOLDER / "AI_Coaching" / "Personal_Context.md"
+    try:
+        if context_file.exists():
+            content = context_file.read_text(encoding="utf-8").strip()
+            if content:
+                return f"### Personal Context (Supplied by User)\n{content}\n"
+    except Exception as e:
+        logger.warning(f"Failed to read personal context file: {e}")
+        
+    return ""
+
+
 def _build_data_context(analysis_results: Dict[str, Any]) -> str:
     """Assemble a full data-context block from all analysis sections."""
     date_range = analysis_results.get("date_range", {})
@@ -292,6 +309,7 @@ def _build_data_context(analysis_results: Dict[str, Any]) -> str:
     sections = [
         f"## Data Context  (date range: {start} to {end})",
         "",
+        _get_personal_context(),
         "### Trends",
         _format_trends(analysis_results),
         "",
