@@ -272,7 +272,7 @@ def main() -> None:
     print("=" * 60)
 
     report_date = datetime.now().strftime("%Y-%m-%d")
-    previous_snapshot = get_previous_snapshot()
+    previous_snapshot = get_previous_snapshot(exclude_week=report_date)
     current_snapshot = build_snapshot(analysis_results, report_date)
     _, was_updated = save_snapshot(current_snapshot)
     

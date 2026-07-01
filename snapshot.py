@@ -184,11 +184,17 @@ def load_snapshots() -> List[Dict[str, Any]]:
         return []
 
 
-def get_previous_snapshot() -> Optional[Dict[str, Any]]:
-    """Return the most recent snapshot from history, or None if no history."""
+def get_previous_snapshot(exclude_week: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Return the most recent snapshot from history (excluding a specific week), or None if no history."""
     snapshots = load_snapshots()
     if not snapshots:
         return None
+        
+    if exclude_week:
+        snapshots = [s for s in snapshots if s.get("week") != exclude_week]
+        if not snapshots:
+            return None
+            
     return snapshots[-1]
 
 
