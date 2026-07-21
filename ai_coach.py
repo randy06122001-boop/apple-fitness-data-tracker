@@ -300,6 +300,43 @@ def _get_personal_context() -> str:
     return ""
 
 
+def _format_composite_scores(analysis_results: Dict[str, Any]) -> str:
+    """Format composite health scores for the AI context."""
+    scores = analysis_results.get("composite_scores", {})
+    if not scores:
+        return ""
+
+    _ZONE_LABELS = {"green": "Recovered", "yellow": "Moderate", "red": "Needs Rest"}
+    lines: List[str] = ["### Composite Health Scores"]
+
+    for score_key in ("recovery", "sleep", "strain"):
+        score_info = scores.get(score_key, {})
+        if not score_info:
+            continue
+
+        current = score_info.get("current")
+        zone = score_info.get("zone", "unknown")
+        avg_7d = score_info.get("avg_7d")
+        avg_30d = score_info.get("avg_30d")
+        components = score_info.get("components", {})
+
+        zone_label = _ZONE_LABELS.get(zone, zone)
+        line = f"• **{score_key.title()} Score**: {current:.0f}/100 ({zone_label})"
+        if avg_7d is not None:
+            line += f" · 7d avg {avg_7d:.0f}"
+        if avg_30d is not None:
+            line += f" · 30d avg {avg_30d:.0f}"
+        lines.append(line)
+
+        # Component breakdown
+        if components:
+            comp_parts = [f"{k}: {v:.0f}" for k, v in components.items() if v is not None]
+            if comp_parts:
+                lines.append(f"  Components: {', '.join(comp_parts)}")
+
+    return "\n".join(lines)
+
+
 def _build_data_context(analysis_results: Dict[str, Any]) -> str:
     """Assemble a full data-context block from all analysis sections."""
     date_range = analysis_results.get("date_range", {})
@@ -310,6 +347,14 @@ def _build_data_context(analysis_results: Dict[str, Any]) -> str:
         f"## Data Context  (date range: {start} to {end})",
         "",
         _get_personal_context(),
+    ]
+
+    # Include composite scores prominently at the top
+    scores_block = _format_composite_scores(analysis_results)
+    if scores_block:
+        sections.extend([scores_block, ""])
+
+    sections.extend([
         "### Trends",
         _format_trends(analysis_results),
         "",
@@ -318,7 +363,7 @@ def _build_data_context(analysis_results: Dict[str, Any]) -> str:
         "",
         "### Correlations",
         _format_correlations(analysis_results),
-    ]
+    ])
 
     stats_block = _format_summary_stats(analysis_results)
     if stats_block:

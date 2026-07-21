@@ -121,7 +121,22 @@ def build_snapshot(
         "workout_count": workout_count,
         "workout_duration_hrs": workout_duration_hrs,
         "sleep_avg_hrs": sleep_avg_hrs,
+        "scores": {},
     }
+
+    # ── Composite scores ──
+    composite_scores = analysis_results.get("composite_scores", {})
+    scores_snapshot = {}
+    for score_key in ("recovery", "sleep", "strain"):
+        score_info = composite_scores.get(score_key, {})
+        if score_info:
+            scores_snapshot[score_key] = {
+                "current": score_info.get("current"),
+                "avg_7d": score_info.get("avg_7d"),
+                "avg_30d": score_info.get("avg_30d"),
+                "zone": score_info.get("zone", "unknown"),
+            }
+    snapshot["scores"] = scores_snapshot
 
     return snapshot
 
@@ -260,6 +275,32 @@ def compute_wow_deltas(
             "current_avg": curr_avg,
             "previous_avg": prev_avg,
         }
+
+    # ── Score deltas ──
+    curr_scores = current.get("scores", {})
+    prev_scores = previous.get("scores", {})
+    for score_key in ("recovery", "sleep", "strain"):
+        curr_score = curr_scores.get(score_key, {})
+        prev_score = prev_scores.get(score_key, {})
+        curr_avg = curr_score.get("avg_7d")
+        prev_avg = prev_score.get("avg_7d")
+        if curr_avg is not None and prev_avg is not None:
+            try:
+                curr_avg = float(curr_avg)
+                prev_avg = float(prev_avg)
+                delta = round(curr_avg - prev_avg, 1)
+                pct = round((delta / prev_avg) * 100, 1) if prev_avg != 0 else 0.0
+                direction = "unchanged" if abs(delta) < 0.1 else ("up" if delta > 0 else "down")
+                deltas[f"{score_key}_score"] = {
+                    "delta": delta,
+                    "pct_change": pct,
+                    "direction": direction,
+                    "unit": "/100",
+                    "current_avg": curr_avg,
+                    "previous_avg": prev_avg,
+                }
+            except (TypeError, ValueError):
+                pass
 
     return deltas
 

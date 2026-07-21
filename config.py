@@ -51,6 +51,29 @@ ROLLING_WINDOWS = [7, 30, 90]
 ANOMALY_STD_THRESHOLD = 2.0
 
 # ──────────────────────────────────────────────
+# COMPOSITE SCORE SETTINGS
+# ──────────────────────────────────────────────
+# Weights for each score's sub-components (must sum to 1.0).
+SCORE_WEIGHTS = {
+    "recovery": {"hrv": 0.40, "rhr": 0.30, "sleep": 0.30},
+    "sleep": {"duration": 0.40, "deep": 0.25, "rem": 0.20, "consistency": 0.15},
+    "strain": {"trimp": 0.60, "active_energy": 0.25, "exercise_minutes": 0.15},
+}
+
+# Optimal sleep duration range (hours).
+SLEEP_OPTIMAL_RANGE = (7.0, 9.0)
+
+# Target sleep stage fractions (of total sleep time).
+DEEP_SLEEP_TARGET = (0.15, 0.20)
+REM_SLEEP_TARGET = (0.20, 0.25)
+
+# Rolling window for computing personal baselines used in scoring.
+SCORE_BASELINE_WINDOW = 30
+
+# Score zone thresholds (inclusive lower bounds).
+SCORE_ZONES = {"green": 67, "yellow": 34}
+
+# ──────────────────────────────────────────────
 # METRIC DEFINITIONS
 # ──────────────────────────────────────────────
 # Apple Health XML record type identifiers we care about.
@@ -106,4 +129,28 @@ METRIC_UNITS = {
     "vertical_oscillation":    "cm",
     "water_temperature":       "°C",
     "underwater_depth":        "m",
+}
+
+# Units for composite scores
+METRIC_UNITS.update({
+    "recovery_score": "/100",
+    "sleep_score": "/100",
+    "strain_score": "/100",
+})
+
+# ──────────────────────────────────────────────
+# SCORING THRESHOLDS
+# ──────────────────────────────────────────────
+SCORE_ZONES = {
+    "green": 67,
+    "yellow": 34,
+}
+
+SLEEP_OPTIMAL_RANGE = (7.0, 9.0)
+
+SCORE_WEIGHTS = {
+    "recovery": {"hrv": 0.40, "rhr": 0.30, "sleep": 0.30},
+    "sleep": {"duration": 0.40, "deep": 0.25, "rem": 0.20, "consistency": 0.15},
+    "sleep_no_stages": {"duration": 0.65, "consistency": 0.35},
+    "strain": {"trimp": 0.60, "active_energy": 0.25, "exercise_minutes": 0.15},
 }

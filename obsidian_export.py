@@ -97,6 +97,9 @@ ANOMALIES_DIR: Path = _BASE_DIR / "Anomalies"
 
 _ALL_DIRS: List[Path] = [SUMMARIES_DIR, METRICS_DIR, CHARTS_DIR, AI_COACHING_DIR, ANOMALIES_DIR]
 
+# Maximum chart/backfill history window (2 years).
+_CHART_HISTORY_DAYS: int = 730
+
 
 def _ensure_directories() -> None:
     """Create the full folder hierarchy if it doesn't already exist."""
@@ -307,6 +310,243 @@ def _extract_anomalies_section(analysis_results: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _extract_scores_section(
+    analysis_results: Dict[str, Any],
+    wow_deltas: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    """Build a Markdown section displaying composite health scores with zone callouts."""
+    scores = analysis_results.get("composite_scores", {})
+    if not scores:
+        return ""
+
+    _ZONE_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+    _SCORE_LABELS = {
+        "recovery": ("Recovery", "Measures your body's readiness based on HRV, RHR, and sleep"),
+        "sleep": ("Sleep", "Evaluates sleep duration, stages, and consistency"),
+        "strain": ("Strain", "Tracks daily exertion from workouts and activity"),
+    }
+    _COMPONENT_DESCRIPTIONS = {
+        "recovery": {"hrv": "HRV vs baseline", "rhr": "RHR vs baseline", "sleep": "Sleep adequacy"},
+        "sleep": {"duration": "Duration", "deep": "Deep sleep %", "rem": "REM %", "consistency": "Consistency"},
+        "strain": {"trimp": "Workout TRIMP", "active_energy": "Active energy", "exercise_minutes": "Exercise minutes"},
+    }
+
+    lines: List[str] = ["## 💯 Health Scores\n"]
+
+    for score_key in ("recovery", "sleep", "strain"):
+        score_info = scores.get(score_key, {})
+        if not score_info:
+            continue
+
+        label, description = _SCORE_LABELS.get(score_key, (score_key.title(), ""))
+        current = score_info.get("current")
+        zone = score_info.get("zone", "unknown")
+        zone_emoji = _ZONE_EMOJI.get(zone, "⚪")
+        avg_7d = score_info.get("avg_7d")
+
+        if current is None:
+            continue
+
+        # Build the header line with WoW delta
+        header = f"> [!info] {label}: {zone_emoji} {current:.0f}/100"
+        if wow_deltas and f"{score_key}_score" in wow_deltas:
+            delta_info = wow_deltas[f"{score_key}_score"]
+            delta = delta_info.get("delta", 0)
+            direction = delta_info.get("direction", "unchanged")
+            if direction == "unchanged":
+                header += " (➡️ unchanged)"
+            else:
+                sign = "+" if delta > 0 else ""
+                arrow = "⬆️" if delta > 0 else "⬇️"
+                header += f" ({arrow} {sign}{delta:.0f} from last week)"
+        lines.append(header)
+
+        # Component breakdown line
+        components = score_info.get("components", {})
+        comp_descs = _COMPONENT_DESCRIPTIONS.get(score_key, {})
+        comp_parts = []
+        for comp_key, comp_label in comp_descs.items():
+            comp_val = components.get(comp_key)
+            if comp_val is not None:
+                comp_parts.append(f"{comp_label} {comp_val:.0f}")
+
+        detail_line = " · ".join(comp_parts) if comp_parts else description
+        if avg_7d is not None:
+            detail_line += f" · 7d avg {avg_7d:.0f}"
+        lines.append(f"> {detail_line}")
+
+        # Wiki-link to dedicated score page
+        score_page = _sanitise_filename(f"{label} Score")
+        lines.append(f"> → [[{score_page}]]")
+        lines.append("")
+
+    if len(lines) <= 1:
+        return ""  # No scores to show
+
+    return "\n".join(lines) + "\n"
+
+
+def generate_score_chart(
+    score_key: str,
+    daily_scores: pd.Series,
+    report_date: str,
+) -> Optional[Path]:
+    """Generate a score chart with zone-colored background bands.
+
+    Green band (67–100), yellow band (34–67), red band (0–34).
+    """
+    if daily_scores is None or daily_scores.empty or len(daily_scores) < 2:
+        return None
+
+    display = _metric_display_name(f"{score_key}_score")
+    filename = _sanitise_filename(display) + f"_{report_date}.png"
+    filepath = CHARTS_DIR / filename
+
+    df = daily_scores.copy()
+    cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_HISTORY_DAYS)
+    if hasattr(df.index, 'tz') and df.index.tz is not None:
+        cutoff = cutoff.tz_localize(df.index.tz)
+    df = df[df.index >= cutoff]
+    if len(df) < 2:
+        return None
+    rolling_7 = df.rolling(7, min_periods=1).mean()
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # Zone background bands
+    ax.axhspan(0, 34, alpha=0.10, color='#EF5350', label='Needs Rest')    # Red
+    ax.axhspan(34, 67, alpha=0.10, color='#FFC107', label='Moderate')     # Yellow
+    ax.axhspan(67, 100, alpha=0.10, color='#4CAF50', label='Recovered')   # Green
+
+    # Score lines
+    ax.plot(df.index, df.values, marker='o', markersize=3, linestyle='-',
+            alpha=0.5, label='Daily Score', color='#1565C0', linewidth=1)
+    ax.plot(rolling_7.index, rolling_7.values, linestyle='-', linewidth=2.5,
+            label='7-Day Avg', color='#0D47A1')
+
+    ax.set_ylim(0, 100)
+    ax.set_title(f"{display} — Last {len(df)} Days", fontsize=13, fontweight='bold')
+    ax.set_ylabel("Score (0–100)")
+    ax.grid(True, linestyle='--', alpha=0.3)
+    ax.legend(loc='lower left', fontsize=8)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m') if len(df) > 180 else mdates.DateFormatter('%b %d'))
+    fig.autofmt_xdate()
+    plt.tight_layout()
+
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(filepath, dpi=120)
+    plt.close(fig)
+    return filepath
+
+
+def generate_score_page(
+    score_key: str,
+    score_info: Dict[str, Any],
+    report_date: str,
+) -> Optional[Path]:
+    """Create or update a dedicated metric page for a composite score."""
+    if not score_info:
+        return None
+
+    display = f"{score_key.title()} Score"
+    filename = _sanitise_filename(display) + ".md"
+    filepath = METRICS_DIR / filename
+
+    current = score_info.get("current")
+    zone = score_info.get("zone", "unknown")
+    avg_7d = score_info.get("avg_7d")
+    avg_30d = score_info.get("avg_30d")
+    daily = score_info.get("daily")
+
+    _ZONE_EMOJI = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+    zone_emoji = _ZONE_EMOJI.get(zone, "⚪")
+
+    # Generate chart from daily series
+    chart_path = None
+    if isinstance(daily, pd.Series) and not daily.empty:
+        chart_path = generate_score_chart(score_key, daily, report_date)
+
+    new_row = f"| {report_date} | {current:.0f} | /100 | {zone_emoji} {zone} |"
+
+    if filepath.exists():
+        existing = filepath.read_text(encoding="utf-8")
+        # Update zone line
+        zone_replacement = f"**Current Zone**: {zone_emoji} {zone.upper()} ({current:.0f}/100)"
+        updated = re.sub(r"\*\*Current Zone\*\*:.*", zone_replacement, existing, count=1)
+        if updated == existing:  # pattern not found, try updating trend
+            updated = existing
+
+        if _has_date_row(updated, report_date):
+            updated = _replace_date_row(updated, report_date, new_row)
+            filepath.write_text(updated, encoding="utf-8")
+        else:
+            filepath.write_text(
+                updated.rstrip("\n") + "\n" + new_row + "\n",
+                encoding="utf-8",
+            )
+    else:
+        fm = _frontmatter({
+            "title": display,
+            "score_type": score_key,
+            "tags": ["health", "score", f"{score_key}-score"],
+            "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        })
+
+        chart_block = f"![[{chart_path.parent.name}/{chart_path.name}]]\n" if chart_path else ""
+
+        averages: List[str] = []
+        if avg_7d is not None:
+            averages.append(f"- **7-day average**: {avg_7d:.1f} /100")
+        if avg_30d is not None:
+            averages.append(f"- **30-day average**: {avg_30d:.1f} /100")
+        averages_block = "\n".join(averages) if averages else "_Not enough data yet._"
+
+        # Backfill history from daily series
+        history_rows: List[str] = []
+        if isinstance(daily, pd.Series) and not daily.empty:
+            cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_HISTORY_DAYS)
+            if hasattr(daily.index, 'tz') and daily.index.tz is not None:
+                cutoff = cutoff.tz_localize(daily.index.tz)
+            for date_idx, val in daily[daily.index >= cutoff].items():
+                if pd.notna(val):
+                    d_str = date_idx.strftime("%Y-%m-%d")
+                    z = _ZONE_EMOJI.get(
+                        "green" if val >= 67 else "yellow" if val >= 34 else "red", "⚪"
+                    )
+                    history_rows.append(f"| {d_str} | {val:.0f} | /100 | {z} |")
+
+        if not history_rows:
+            history_rows.append(new_row)
+
+        # Component breakdown
+        components = score_info.get("components", {})
+        comp_lines: List[str] = []
+        for comp_key, comp_val in components.items():
+            if comp_val is not None:
+                comp_lines.append(f"- **{comp_key.replace('_', ' ').title()}**: {comp_val:.1f}")
+        comp_block = "\n".join(comp_lines) if comp_lines else "_No component data._"
+
+        body_parts: List[str] = [
+            fm,
+            f"# {display}\n",
+            f"**Current Zone**: {zone_emoji} {zone.upper()} ({current:.0f}/100)\n",
+            chart_block,
+            "## Component Breakdown\n",
+            comp_block + "\n",
+            "## Rolling Averages\n",
+            averages_block + "\n",
+            "## Data Log\n",
+            "| Date | Score | Unit | Zone |",
+            "| ---- | ----: | ---- | ---- |",
+            *history_rows,
+            "",
+        ]
+        content = "\n".join(body_parts)
+        _write_full(filepath, content)
+
+    return filepath
+
+
 def generate_weekly_summary(
     analysis_results: Dict[str, Any],
     ai_summary: str,
@@ -325,6 +565,7 @@ def generate_weekly_summary(
         "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
     })
 
+    scores_section = _extract_scores_section(analysis_results, wow_deltas)
     overview = _extract_metrics_overview(analysis_results, wow_deltas)
     anomalies = _extract_anomalies_section(analysis_results)
 
@@ -362,10 +603,18 @@ def generate_weekly_summary(
     body_parts: List[str] = [
         fm,
         f"# 📊 Weekly Health Summary – {report_date}\n",
+    ]
+
+    # Scores section goes first (most prominent)
+    if scores_section:
+        body_parts.append(scores_section)
+        body_parts.append("---\n")
+
+    body_parts.extend([
         "## Key Metrics Overview\n",
         overview,
         "---\n",
-    ]
+    ])
 
     if wow_section:
         body_parts.append(wow_section)
@@ -411,21 +660,25 @@ def generate_metric_chart(metric_key: str, metric_df: pd.DataFrame, report_date:
     if metric_df.empty or "raw" not in metric_df.columns:
         return None
         
-    # Take up to last 90 days
-    df = metric_df.tail(90).copy()
+    # Filter to the last 2 years of calendar time
+    cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_HISTORY_DAYS)
+    if hasattr(metric_df.index, 'tz') and metric_df.index.tz is not None:
+        cutoff = cutoff.tz_localize(metric_df.index.tz)
+    df = metric_df[metric_df.index >= cutoff].copy()
     if len(df) < 2:
         return None
         
-    plt.figure(figsize=(8, 4))
-    plt.plot(df.index, df["raw"], marker='o', linestyle='-', alpha=0.4, label='Daily Value', color='#4CAF50')
+    fig, ax = plt.subplots(figsize=(10, 5) if len(df) > 180 else (8, 4))
+    ax.plot(df.index, df["raw"], marker='o' if len(df) <= 180 else None,
+            markersize=3, linestyle='-', alpha=0.4, label='Daily Value', color='#4CAF50')
     if "rolling_7" in df.columns:
-        plt.plot(df.index, df["rolling_7"], linestyle='-', linewidth=2, label='7-Day Avg', color='#2E7D32')
+        ax.plot(df.index, df["rolling_7"], linestyle='-', linewidth=2, label='7-Day Avg', color='#2E7D32')
         
-    plt.title(f"{display} - Last 90 Days")
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.legend()
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
-    plt.gcf().autofmt_xdate()
+    ax.set_title(f"{display} — Last {len(df)} Days")
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.legend()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m') if len(df) > 180 else mdates.DateFormatter('%b %d'))
+    fig.autofmt_xdate()
     plt.tight_layout()
     
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -507,7 +760,10 @@ def generate_metric_page(
         # Backfill history table
         history_rows = []
         if metric_df is not None and not metric_df.empty and "raw" in metric_df.columns:
-            df_recent = metric_df.tail(90)
+            cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_HISTORY_DAYS)
+            if hasattr(metric_df.index, 'tz') and metric_df.index.tz is not None:
+                cutoff = cutoff.tz_localize(metric_df.index.tz)
+            df_recent = metric_df[metric_df.index >= cutoff]
             for date_idx, row in df_recent.iterrows():
                 val = round(float(row["raw"]), 2)
                 d_str = date_idx.strftime("%Y-%m-%d")
@@ -802,11 +1058,12 @@ def export_to_obsidian(
     This is the single entry point that orchestrates every export step:
 
     1. Ensure the directory tree exists.
-    2. Write/overwrite the Weekly Summary note (with WoW deltas).
+    2. Write/overwrite the Weekly Summary note (with WoW deltas and scores).
     3. Create or update per-metric tracking pages.
-    4. Append to the AI Coaching Log.
-    5. Write an Anomaly Report (if anomalies are present).
-    6. Generate a Monthly Summary (if monthly_snapshots is provided).
+    4. Generate composite score pages and charts.
+    5. Append to the AI Coaching Log.
+    6. Write an Anomaly Report (if anomalies are present).
+    7. Generate a Monthly Summary (if monthly_snapshots is provided).
     """
     logger.info("Starting Obsidian export for %s …", report_date)
     _ensure_directories()
@@ -816,6 +1073,21 @@ def export_to_obsidian(
     )
 
     metric_paths = generate_all_metric_pages(analysis_results, report_date)
+
+    # Generate composite score pages
+    score_paths: List[Path] = []
+    composite_scores = analysis_results.get("composite_scores", {})
+    for score_key in ("recovery", "sleep", "strain"):
+        score_info = composite_scores.get(score_key, {})
+        if score_info:
+            try:
+                path = generate_score_page(score_key, score_info, report_date)
+                if path:
+                    score_paths.append(path)
+            except Exception:
+                logger.exception("Failed to generate score page for %s", score_key)
+    if score_paths:
+        logger.info("Generated %d composite score pages.", len(score_paths))
 
     coaching_path = generate_coaching_log(ai_summary, ai_recommendations, report_date)
 
@@ -828,13 +1100,15 @@ def export_to_obsidian(
     result = {
         "weekly_summary": summary_path,
         "metric_pages": metric_paths,
+        "score_pages": score_paths,
         "coaching_log": coaching_path,
         "anomaly_report": anomaly_path,
         "monthly_summary": monthly_path,
     }
     logger.info(
-        "Obsidian export complete: %d metric pages, anomaly report %s",
+        "Obsidian export complete: %d metric pages, %d score pages, anomaly report %s",
         len(metric_paths),
+        len(score_paths),
         "written" if anomaly_path else "skipped (none)",
     )
     return result

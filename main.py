@@ -170,6 +170,8 @@ def stage_obsidian_export(
 
     if wow_deltas:
         print(f"  📈 Week-over-week comparison: {len(wow_deltas)} metrics compared.")
+    if result.get("score_pages"):
+        print(f"  💯 {len(result['score_pages'])} composite score pages generated.")
     if result.get("monthly_summary"):
         print(f"  📅 Monthly rollup generated!")
     if result.get("metric_pages"):

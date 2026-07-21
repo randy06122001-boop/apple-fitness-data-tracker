@@ -48,6 +48,9 @@ class AnalysisResults:
     workout_analysis: dict[str, Any] = field(default_factory=dict)
     """Frequency by type, avg duration, weekly training load."""
 
+    composite_scores: dict[str, Any] = field(default_factory=dict)
+    """Daily composite scores: recovery, sleep, strain (0-100)."""
+
 
 # ────────────────────────────────────────────────────────────────
 # Helpers
@@ -758,6 +761,24 @@ def analyze(data: dict[str, pd.DataFrame]) -> AnalysisResults:
         workouts.get("stats", {}).get("unique_types", 0),
     )
 
+    # 7. Composite health scores
+    try:
+        from scores import compute_all_scores
+        composite = compute_all_scores(
+            daily_series=daily_series,
+            sleep_analysis=sleep,
+            workout_analysis=workouts,
+            anomalies=anomalies,
+            data=data,
+        )
+        logger.info(
+            "Computed composite scores: %s",
+            [k for k, v in composite.items() if v],
+        )
+    except Exception:
+        logger.exception("Failed to compute composite scores – continuing without them.")
+        composite = {}
+
     return AnalysisResults(
         rolling_averages=rolling,
         correlations=correlations,
@@ -765,4 +786,5 @@ def analyze(data: dict[str, pd.DataFrame]) -> AnalysisResults:
         trend_summary=trend,
         sleep_analysis=sleep,
         workout_analysis=workouts,
+        composite_scores=composite,
     )
