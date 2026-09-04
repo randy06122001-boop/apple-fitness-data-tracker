@@ -97,8 +97,11 @@ ANOMALIES_DIR: Path = _BASE_DIR / "Anomalies"
 
 _ALL_DIRS: List[Path] = [SUMMARIES_DIR, METRICS_DIR, CHARTS_DIR, AI_COACHING_DIR, ANOMALIES_DIR]
 
-# Maximum chart/backfill history window (2 years).
-_CHART_HISTORY_DAYS: int = 730
+# Chart visual window (last 90 days).
+_CHART_VISUAL_DAYS: int = 90
+
+# Data-log backfill window (last 2 years).
+_BACKFILL_HISTORY_DAYS: int = 730
 
 
 def _ensure_directories() -> None:
@@ -403,7 +406,7 @@ def generate_score_chart(
     filepath = CHARTS_DIR / filename
 
     df = daily_scores.copy()
-    cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_HISTORY_DAYS)
+    cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_VISUAL_DAYS)
     if hasattr(df.index, 'tz') and df.index.tz is not None:
         cutoff = cutoff.tz_localize(df.index.tz)
     df = df[df.index >= cutoff]
@@ -414,7 +417,7 @@ def generate_score_chart(
     fig, ax = plt.subplots(figsize=(10, 5))
 
     # Zone background bands
-    ax.axhspan(0, 34, alpha=0.10, color='#EF5350', label='Needs Rest')    # Red
+    ax.axhspan(0, 34, alpha=0.10, color='#EF5350', label='Low')           # Red
     ax.axhspan(34, 67, alpha=0.10, color='#FFC107', label='Moderate')     # Yellow
     ax.axhspan(67, 100, alpha=0.10, color='#4CAF50', label='Recovered')   # Green
 
@@ -429,7 +432,7 @@ def generate_score_chart(
     ax.set_ylabel("Score (0–100)")
     ax.grid(True, linestyle='--', alpha=0.3)
     ax.legend(loc='lower left', fontsize=8)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m') if len(df) > 180 else mdates.DateFormatter('%b %d'))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
     fig.autofmt_xdate()
     plt.tight_layout()
 
@@ -504,7 +507,7 @@ def generate_score_page(
         # Backfill history from daily series
         history_rows: List[str] = []
         if isinstance(daily, pd.Series) and not daily.empty:
-            cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_HISTORY_DAYS)
+            cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_BACKFILL_HISTORY_DAYS)
             if hasattr(daily.index, 'tz') and daily.index.tz is not None:
                 cutoff = cutoff.tz_localize(daily.index.tz)
             for date_idx, val in daily[daily.index >= cutoff].items():
@@ -660,25 +663,25 @@ def generate_metric_chart(metric_key: str, metric_df: pd.DataFrame, report_date:
     if metric_df.empty or "raw" not in metric_df.columns:
         return None
         
-    # Filter to the last 2 years of calendar time
-    cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_HISTORY_DAYS)
+    # Filter to the last 90 days of calendar time
+    cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_VISUAL_DAYS)
     if hasattr(metric_df.index, 'tz') and metric_df.index.tz is not None:
         cutoff = cutoff.tz_localize(metric_df.index.tz)
     df = metric_df[metric_df.index >= cutoff].copy()
     if len(df) < 2:
         return None
         
-    fig, ax = plt.subplots(figsize=(10, 5) if len(df) > 180 else (8, 4))
-    ax.plot(df.index, df["raw"], marker='o' if len(df) <= 180 else None,
-            markersize=3, linestyle='-', alpha=0.4, label='Daily Value', color='#4CAF50')
+    plt.figure(figsize=(8, 4))
+    plt.plot(df.index, df["raw"], marker='o', markersize=3, linestyle='-',
+             alpha=0.4, label='Daily Value', color='#4CAF50')
     if "rolling_7" in df.columns:
-        ax.plot(df.index, df["rolling_7"], linestyle='-', linewidth=2, label='7-Day Avg', color='#2E7D32')
+        plt.plot(df.index, df["rolling_7"], linestyle='-', linewidth=2, label='7-Day Avg', color='#2E7D32')
         
-    ax.set_title(f"{display} — Last {len(df)} Days")
-    ax.grid(True, linestyle='--', alpha=0.5)
-    ax.legend()
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m') if len(df) > 180 else mdates.DateFormatter('%b %d'))
-    fig.autofmt_xdate()
+    plt.title(f"{display} — Last {len(df)} Days")
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend()
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
+    plt.gcf().autofmt_xdate()
     plt.tight_layout()
     
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -760,7 +763,7 @@ def generate_metric_page(
         # Backfill history table
         history_rows = []
         if metric_df is not None and not metric_df.empty and "raw" in metric_df.columns:
-            cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_CHART_HISTORY_DAYS)
+            cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=_BACKFILL_HISTORY_DAYS)
             if hasattr(metric_df.index, 'tz') and metric_df.index.tz is not None:
                 cutoff = cutoff.tz_localize(metric_df.index.tz)
             df_recent = metric_df[metric_df.index >= cutoff]
